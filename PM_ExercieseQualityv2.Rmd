@@ -1,0 +1,146 @@
+---
+output: html_document
+---
+
+#Practical Machine Learning: Course Project   
+
+#Synopsis
+This report investigates the use of two learning models, in an effort to measure the quality of execution of *Unilateral Dumbbell Biceps Curl* exercise. The goal of the project is to predict the manner in which the particular execise was executed.
+
+#Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, the goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+##Data
+The training data for this project is available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data is available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project comes from this source: http://groupware.les.inf.puc-rio.br/har.
+
+#Exploratory Analysis
+```{r setoptions, echo=FALSE,results='hide',message=FALSE}
+library(knitr);library(randomForest);library(caret)
+setwd("C:/Users/Herman/data-science/Prac ML")
+session <- sessionInfo()
+opts_chunk$set(echo=FALSE, results="hide")
+```
+
+##Data 
+```{r readData, echo=TRUE,cache=TRUE}
+url_training <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+dest_training <- "pml-training.csv"
+training <- read.csv(dest_training, na.strings=c("NA","#DIV/0!",""), header=TRUE)
+
+url_testing <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+dest_testing <- "pml-testing.csv"
+testing <- read.csv(dest_testing, na.strings=c("NA","#DIV/0!",""), header=TRUE)
+```
+Six participants were asked to perform one set of 10 repetitions of the *Unilateral Dumbbell Biceps Curl* in five different fashions: 
+
+* Class A: exactly according to the specification 
+* Class B: throwing the elbows to the front 
+* Class C: lifting the dumbbell only halfway 
+* Class D: lowering the dumbbell only halfway 
+* Class E: throwing the hips to the front
+
+For data recording four 9 degrees of freedom Razor inertial measurement units (IMU), which provide three-axes acceleration, gyroscope and magnetometer data at a joint sampling rate of 45 Hz. 
+
+Each IMU had following sensors:  
+
+* Accelerometer (X,Y,Z). Measures accelerations, changes in position and orientation sensor in the UP-DOWN plane.  
+* Gyroscope (X,Y,Z). Measures either changes in orientation and changes in rotational velocity.  
+* Magnetometer (X,Y,Z). Measures magnetic fields, used as a compass to determine north, south, east and west orientation.
+
+The IMU where mounted at: 
+
+* Arm  
+* Forearm  
+* Belt  
+* Dumbbell
+
+For feature extraction a sliding window approach with different lengths from 0.5 second to 2.5 seconds, with 0.5 second overlap. In each step of the sliding window approach they calculated features on the Euler angles (roll, pitch and yaw), as well as the raw accelerometer, gyroscope and magnetometer readings. For the Euler angles of each of the four sensors we calculated eight features: mean, variance, standard deviation, max, min, amplitude, kurtosis and skewness.
+
+Total number of measured variables: **160**
+
+* 4 IMU's times of Acc(x,y,z), Gyro(x,y,z), Magno(x,y,z) = 36 
+* 4 Roll, Pitch, Yaw derived values (29) = 116  
+* ID, Subject, Time related variables = 7   
+* Classe = 1 
+
+Below is a table listing all of the potential features for the analysis.
+
+```{r, echo=FALSE,results = 'markup', cache=TRUE}
+colnames(training)
+```
+
+#Feature Selection
+Eliminate potential features that have insufficient information for modeling
+```{r FeatureSel1, echo=TRUE,results ='asis',cache=TRUE}
+training <- training[, colSums(is.na(training)) < nrow(training) * .95]
+colnames(training)
+```
+
+The investigation is focused on determining whether an assessment can be made based on specific measurements of execution of a set of activities. Therefore, features used in the analysis are non-user, none-time, none-sensor specific features.
+```{r FeatureSel2, echo=TRUE,cache=TRUE}
+##  Selected features
+features <- c("roll_belt", "pitch_belt", "yaw_belt", "roll_arm", "pitch_arm", "yaw_arm", "roll_forearm", "pitch_forearm", "yaw_forearm", "roll_dumbbell", "pitch_dumbbell", "yaw_dumbbell")
+class_feature <- c("classe")
+training <- training[, c(features, class_feature)]
+```
+
+#Modeling
+Split training data into a training and cross-validation set.  The cross-validation set will be used to select the 'best' model.
+```{r, echo=TRUE,results='markup',cache=TRUE}
+set.seed(11111)
+inTrain <- createDataPartition(training$classe, p = 0.6, list = FALSE)
+test <- training[-inTrain, ]
+train <- training[inTrain, ]
+```
+
+Cross validation will be used to assist with generalizing the models.
+```{r, echo=TRUE,results='markup',cache=TRUE}
+crossVal <- trainControl(method = "cv", number = 4) 
+```
+
+##Boosting 
+```{r, echo=TRUE,results='markup',cache=TRUE}
+gbmModelFit <- train(classe ~ ., data = train, method = "gbm", trControl = crossVal, 
+                     verbose = FALSE)
+prediction <- predict(gbmModelFit, test[, features])
+# Confusion Matrix
+confusionMatrix(prediction, test$classe)
+```
+
+##Random Forest 
+To improve the performance ot the Random Forest on the limited hardware, we will pre-determine the best *mtry* parmater prior to executing the training algorythm. 
+```{r, echo=FALSE,results='markup',cache=TRUE}
+bestmtry <- tuneRF(training[,-13], training$classe, ntreeTry=500, stepFactor=1.5,improve=0.01, plot=FALSE, trace=TRUE, dobest=FALSE)
+bestmtry
+```
+
+The *mtry* model parameter will be set to **3**.
+```{r, echo=TRUE,results='markup',cache=TRUE}
+grid <- expand.grid(.mtry = 3)
+rfModelFit <- train(classe ~ ., data = train, method = "rf", tuneGrid = grid, ntree=500, allowParallel=TRUE)
+prediction <- predict(rfModelFit, test[, features])
+#Confusion Matrix
+confusionMatrix(prediction, test$classe)
+```
+
+#Results
+Random forests accuracy is 0.98 which is higher than boosting with trees 0.93. Out of sample error 0.02.
+
+# Project Prediction
+Below are the prediction of the test set (20) for the course evaluation.
+```{r, echo=TRUE,results='markup',cache=TRUE}
+predict(rfModelFit, testing[, features])
+```
+
+#Appendix
+
+## Environment
+```{r, echo=TRUE,results='markup',cache=TRUE}
+session
+```
